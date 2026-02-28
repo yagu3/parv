@@ -1,4 +1,4 @@
-[
-  "log",
-  "patterns"
-]
+{
+  "log": [],
+  "patterns": {}
+}

@@ -1,4 +1,4 @@
-"""LLM client — calls llama.cpp server with context budget management."""
+"""LLM client — calls llama.cpp server with role validation."""
 import json, urllib.request, urllib.error
 
 class LLM:
@@ -7,16 +7,35 @@ class LLM:
         self.url = f"http://{host}:{port}/v1/chat/completions"
         self.headers = {"Content-Type": "application/json"}
 
-    def call(self, messages, max_tokens=512, temperature=0.4,
-             stop=None, prefill=""):
-        """Call LLM. If prefill is set, forces assistant to start with it."""
-        msgs = list(messages)
-        if prefill:
-            msgs.append({"role": "assistant", "content": prefill})
+    def _fix_roles(self, messages):
+        """Ensure strict user/assistant alternation. Gemma/Mistral require this."""
+        fixed = []
+        for msg in messages:
+            role = msg['role']
+            content = msg['content']
+            if role == 'system':
+                fixed.append(msg)
+                continue
+            # Merge consecutive same-role messages
+            if fixed and fixed[-1]['role'] == role:
+                fixed[-1]['content'] += "\n" + content
+            else:
+                fixed.append({"role": role, "content": content})
+        # Must end with user if we want the model to reply
+        if fixed and fixed[-1]['role'] == 'assistant':
+            fixed.append({"role": "user", "content": "Continue."})
+        # Must have at least one user message after system
+        non_system = [m for m in fixed if m['role'] != 'system']
+        if not non_system or non_system[0]['role'] != 'user':
+            fixed.append({"role": "user", "content": "Hello."})
+        return fixed
+
+    def call(self, messages, max_tokens=400, temperature=0.4, stop=None):
+        """Call LLM with role-validated messages."""
+        msgs = self._fix_roles(messages)
 
         if stop is None:
-            stop = ["RESULT:", "Result:", "Observation:",
-                    "\nUser:", "\nYou:", "\nuser:"]
+            stop = ["RESULT:", "Observation:", "\nUser:", "\nYou:"]
 
         payload = json.dumps({
             "model": self.model, "messages": msgs,
@@ -29,7 +48,7 @@ class LLM:
         resp = urllib.request.urlopen(req, timeout=300)
         text = json.loads(resp.read().decode('utf-8')
             )['choices'][0]['message']['content'].strip()
-        return (prefill + text) if prefill else text
+        return text
 
     def health(self):
         try:

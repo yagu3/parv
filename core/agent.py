@@ -1,36 +1,30 @@
-"""Agent — single smart agent with robust parsing, focused context, date injection."""
+"""Agent — smart routing (chat vs tools), session memory, clean answers."""
 import re, json, msvcrt, time
 from datetime import datetime
 
-TOOL_NAMES = []  # Set by main.py after loading tools
+TOOL_NAMES = []
 
-# Ultra-compact system prompt with few-shot example + date
-SYSTEM = """You are an AI agent on Windows. Act by calling tools. NEVER just explain — DO it.
+# System prompt — allows BOTH chat and tool use
+SYSTEM = """You are YAGU, a helpful AI assistant on Windows. You can chat AND use tools.
 
 Today: {date}
-User desktop: {desktop}
-Workspace: {workspace}
+User: {user} | Desktop: {desktop}
 
-Tools: {tools}
+RULES:
+1. For simple questions (greetings, opinions, facts you know) → just ANSWER directly
+2. For tasks requiring action (create files, search web, run commands) → use tools
+3. After getting a tool RESULT → give a clear ANSWER with the actual info
 
-Format:
-THINK: what I need to do
+TOOL FORMAT (only when needed):
+THINK: brief reason
 TOOL: tool_name
 INPUT: {{"param": "value"}}
 
-Then STOP. System gives RESULT. Continue or finish with a detailed ANSWER.
+ANSWER FORMAT (for final response):
+ANSWER: your detailed response here
 
-Example:
-User: create hello.txt on Desktop
-THINK: create file with content
-TOOL: create_file
-INPUT: {{"file_path": "{desktop}\\\\hello.txt", "content": "Hello World!"}}
-
-IMPORTANT:
-- ALWAYS use tools. NEVER just describe what you would do.
-- After a web_search RESULT, you ALREADY have the info. Just give the ANSWER with the facts.
-- Give DETAILED answers. Include actual data from RESULT, not just "done".
-- Do NOT call extra tools unnecessarily. If you have the answer, say ANSWER: immediately."""
+Available tools: {tools}
+{session}"""
 
 
 def _check_pause():
@@ -49,26 +43,41 @@ class Agent:
         self.memory = memory
         self.history = []
         self.tool_schemas = tool_schemas
+        self.session_facts = []  # Learned during this session
 
-        # Set global tool names for parser
         global TOOL_NAMES
         TOOL_NAMES = [t['function']['name'] for t in tool_schemas]
 
-        # Compact tool list
-        tools_str = ", ".join(TOOL_NAMES)
+        self.hw = hw
+        self._rebuild_system()
 
+    def _rebuild_system(self):
+        """Rebuild system prompt with latest session facts."""
+        tools_str = ", ".join(TOOL_NAMES)
+        session = ""
+        if self.session_facts:
+            session = "\nSession notes: " + " | ".join(self.session_facts[-5:])
         self.system = SYSTEM.format(
             date=datetime.now().strftime("%Y-%m-%d %A"),
-            desktop=hw.desktop, workspace=hw.desktop.rsplit('\\',1)[0],
-            tools=tools_str
+            user=self.hw.user, desktop=self.hw.desktop,
+            tools=tools_str, session=session
         )
 
+    def _needs_tools(self, msg):
+        """Quick check if message likely needs tool use."""
+        low = msg.lower()
+        # Action words that need tools
+        action_words = ['create', 'make', 'write', 'delete', 'remove', 'open',
+                       'search', 'find', 'download', 'run', 'execute', 'list',
+                       'read file', 'click', 'type', 'screenshot', 'move',
+                       'copy', 'rename', 'install', 'save', 'update file']
+        return any(w in low for w in action_words)
+
     def _parse_tool(self, text):
-        """Extract tool + args — extremely robust."""
+        """Extract tool + args."""
         clean = re.sub(r'^#{1,4}\s*', '', text, flags=re.MULTILINE)
         clean = clean.replace('**', '').replace('`', '')
 
-        # Find tool name
         tool = None
         for pat in [r'TOOL:\s*(\w+)', r'Tool:\s*(\w+)', r'Action:\s*(\w+)',
                     r'tool:\s*(\w+)']:
@@ -84,7 +93,6 @@ class Agent:
         if not tool:
             return None, None
 
-        # Find args — JSON
         args = {}
         for pat in [r'INPUT:?\s*(\{.*?\})', r'Input:?\s*(\{.*?\})',
                     r'Action Input:?\s*(\{.*?\})', r'(\{"[^"]+"\s*:.*?\})']:
@@ -96,7 +104,7 @@ class Agent:
                     except: pass
                 if args: break
 
-        # Fallback: extract from tool schema
+        # Fallback: schema extraction
         if not args and tool:
             schema = next((t for t in self.tool_schemas
                           if t['function']['name'] == tool), None)
@@ -109,64 +117,77 @@ class Agent:
 
         return tool, args
 
-    def _parse_answer(self, text):
-        clean = re.sub(r'^#{1,4}\s*', '', text, flags=re.MULTILINE)
-        clean = clean.replace('**', '')
-        for pat in [r'ANSWER:\s*(.*)', r'Answer:\s*(.*)',
-                    r'Final Answer:\s*(.*)']:
-            m = re.search(pat, clean, re.DOTALL)
-            if m: return m.group(1).strip()
-        return None
+    def _clean_response(self, text):
+        """Strip all THINK/TOOL/INPUT markup, return clean text."""
+        # Try ANSWER: pattern first
+        m = re.search(r'ANSWER:\s*(.*)', text, re.DOTALL|re.I)
+        if m: return m.group(1).strip()
+        # Strip markup
+        clean = text
+        clean = re.sub(r'THINK:.*?(?=TOOL:|ANSWER:|$)', '', clean, flags=re.DOTALL|re.I)
+        clean = re.sub(r'TOOL:.*', '', clean, flags=re.I)
+        clean = re.sub(r'INPUT:.*', '', clean, flags=re.DOTALL|re.I)
+        clean = re.sub(r'STOP\s*$', '', clean, flags=re.I)
+        clean = re.sub(r'^#{1,4}\s*', '', clean, flags=re.MULTILINE)
+        clean = clean.replace('**', '').strip()
+        return clean if clean else text.strip()
+
+    def _learn_from_message(self, msg):
+        """Extract facts to remember during session."""
+        low = msg.lower()
+        # Name assignments
+        m = re.search(r'(?:call (?:you|yourself)|your name is|name you)\s+(\w+)', low)
+        if m:
+            name = m.group(1).upper()
+            self.session_facts.append(f"User calls me {name}")
+            self._rebuild_system()
+        # User preferences
+        if 'don\'t' in low or 'dont' in low:
+            if 'file' in low:
+                self.session_facts.append("Don't create files unless asked")
+                self._rebuild_system()
 
     def _trim_history(self):
-        """Aggressively trim — only keep last 2 messages."""
-        if len(self.history) > 2:
-            self.history = self.history[-2:]
-        # Truncate long messages hard (RESULTs can be huge)
+        """Keep last 4 messages, truncate long ones."""
+        if len(self.history) > 4:
+            self.history = self.history[-4:]
         for msg in self.history:
             c = msg.get('content', '')
-            if len(c) > 300:
-                msg['content'] = c[:300] + '...'
+            if len(c) > 400:
+                msg['content'] = c[:400] + '...'
 
     def send(self, user_msg, execute_fn, print_fn=None):
-        """Run agent loop. execute_fn(tool, args) -> (result, img)."""
+        """Smart agent loop."""
         from core.ui import dim, warn, err, S
 
+        self._learn_from_message(user_msg)
         self.history.append({"role": "user", "content": user_msg})
         self._trim_history()
 
-        msgs = [{"role": "system", "content": self.system}] + self.history
-        use_prefill = True
+        needs_tools = self._needs_tools(user_msg)
 
-        last_resp = None
-        for round_n in range(4):  # Max 4 rounds to save context
+        for round_n in range(4):
             _check_pause()
-            self._trim_history()  # Trim EVERY round
-            msgs = [{"role": "system", "content": self.system}] + self.history
+
+            msgs = [{"role": "system", "content": self.system}] + list(self.history)
+
             try:
-                pf = "THINK:" if use_prefill else ""
-                resp = self.llm.call(msgs, max_tokens=400, prefill=pf)
-                last_resp = resp
+                resp = self.llm.call(msgs, max_tokens=400)
             except Exception as e:
                 if "400" in str(e) or "500" in str(e):
-                    # Context overflow → full reset
-                    from core.ui import warn
-                    warn("Context full — starting fresh")
-                    self.history = [{"role":"user","content":user_msg}]
-                    msgs = [{"role":"system","content":self.system}] + self.history
+                    warn("Server error — resetting")
+                    self.history = [{"role": "user", "content": user_msg}]
                     try:
-                        resp = self.llm.call(msgs, max_tokens=512, prefill="THINK:")
-                    except Exception as e2:
-                        from core.ui import err
-                        err(f"Server error: {e2}"); return "Sorry, server is having trouble. Try /new to start fresh."
+                        msgs = [{"role": "system", "content": self.system}] + self.history
+                        resp = self.llm.call(msgs, max_tokens=400)
+                    except:
+                        err("Server down"); return "Sorry, the server is having trouble. Try /new."
                 else:
-                    from core.ui import err
                     err(f"Error: {e}"); return None
 
-            use_prefill = False
-
-            # Try tool
+            # Try tool extraction
             tool, args = self._parse_tool(resp)
+
             if tool:
                 # Show thinking
                 m = re.search(r'THINK:?\s*(.*?)(?:TOOL:|Tool:)', resp, re.DOTALL|re.I)
@@ -189,38 +210,24 @@ class Agent:
                 if self.memory and "✗" in result:
                     self.memory.log_error(tool, result, user_msg)
 
-                # Truncate result for history to save context
+                # Add to history as proper user/assistant pair
                 short_result = result[:200] + '...' if len(result) > 200 else result
-                msgs.append({"role": "assistant", "content": resp})
-                msgs.append({"role": "user", "content":
-                    f"RESULT: {short_result}\nIf you have enough info, give ANSWER now. Otherwise call another TOOL."})
-                self.history.append({"role": "assistant", "content": resp[:200]})
-                self.history.append({"role": "user", "content": f"RESULT: {short_result}"})
+                self.history.append({"role": "assistant", "content":
+                    f"Used {tool}. Result: {short_result}"})
+                self.history.append({"role": "user", "content":
+                    f"Tool result: {short_result}\nNow give a clear ANSWER to the original question."})
+                self._trim_history()
                 continue
 
-            # Try answer
-            answer = self._parse_answer(resp)
-            if answer:
-                self.history.append({"role": "assistant", "content": resp})
-                return answer
+            # No tool → this is the answer
+            clean = self._clean_response(resp)
+            if clean:
+                self.history.append({"role": "assistant", "content": clean[:300]})
+                return clean
 
-            # No tool, no answer → re-prompt once
-            if round_n == 0:
-                dim("💭 (redirecting to tools...)")
-                msgs.append({"role": "assistant", "content": resp})
-                msgs.append({"role": "user", "content":
-                    "Use a TOOL now. Format: TOOL: name then INPUT: {...}"})
-                use_prefill = True
-                continue
-
-            # Give up, return whatever model said
-            self.history.append({"role": "assistant", "content": resp})
-            return resp
-
-        # Max rounds — return last thing model said
-        if last_resp:
-            return last_resp.replace('THINK:', '').strip()[:500]
-        return "I ran out of steps. Try a simpler request or /new to start fresh."
+        # Exhausted rounds
+        return self._clean_response(resp) if resp else "I couldn't complete that. Try /new."
 
     def clear(self):
         self.history = []
+        # Keep session facts

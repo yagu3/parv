@@ -102,26 +102,24 @@ class SystemInfo:
         info(f"GPU: {self.gpu} ({self.vram_mb}MB)")
 
     def optimize(self, model_mb):
-        """Smart optimization with KV cache quantization for 4x context."""
+        """Smart optimization with KV cache quantization."""
         t = max(1, self.cores - 1)
         ngl = 0
         if self.has_cuda and self.vram_mb > 0:
             avail = self.vram_mb - 300
             ngl = 999 if model_mb <= avail else max(1, int(avail / model_mb * 200))
-        # KV cache quantization: q4_0 uses ~4x less memory → much bigger context
-        # With q4_0 KV cache: 1GB VRAM leftover = ~16K context (vs ~4K with f16)
-        vram_for_ctx = max(0, self.vram_mb - model_mb - 200) if ngl >= 50 else 0
-        ram_for_ctx = self.ram_free - model_mb - 1024
-        avail_for_ctx = vram_for_ctx + (ram_for_ctx if ram_for_ctx > 0 else 0)
-        # With q4_0 KV: ~0.5MB per 1K ctx for 4B model, ~1MB per 1K for 12B
-        if avail_for_ctx > 4000:
-            ctx = 16384
-        elif avail_for_ctx > 2000:
-            ctx = 8192
-        elif avail_for_ctx > 1000:
-            ctx = 4096
-        else:
-            ctx = 2048
+        # KV-Q4 uses ~4x less memory for context than default f16
+        # So even on tight hardware, we can safely use larger context
+        # Base: pick conservative ctx, then multiply by 3 for KV-Q4 savings
+        vram_left = max(0, self.vram_mb - model_mb - 200) if ngl >= 20 else 0
+        ram_left = max(0, self.ram_free - model_mb - 512)
+        avail_mb = vram_left + ram_left
+        if avail_mb > 6000: base_ctx = 16384
+        elif avail_mb > 3000: base_ctx = 8192
+        elif avail_mb > 1000: base_ctx = 4096
+        else: base_ctx = 2048
+        # KV-Q4 bonus: always at least 4096, and boost base by 2x
+        ctx = max(4096, min(base_ctx * 2, 32768))
         return {
             'threads': t, 'gpu_layers': ngl, 'ctx_size': ctx,
             'batch': 512, 'cache_type_k': 'q4_0', 'cache_type_v': 'q4_0',
@@ -236,31 +234,30 @@ COMPACT_TOOLS = "\n".join(
 # ═══════════════════════════════════════
 # SMART AGENT — robust parsing, context mgmt
 # ═══════════════════════════════════════
-SYSTEM = """You are YaguAI, an AI agent controlling a Windows PC. You MUST use tools to act.
+SYSTEM = """You are an AI agent. You act by calling tools. Never explain, never give code — just call tools.
 
-TOOLS:
-{tools}
+Tools: {tools_short}
 
-FORMAT — use EXACTLY this (plain text, no markdown, no #):
-THINK: what I need to do
+Format (plain text only):
+THINK: reasoning
 TOOL: tool_name
-INPUT: {{"param": "value"}}
+INPUT: {{"key": "value"}}
 
-Then STOP. The system shows the RESULT. Then continue or finish:
-THINK: done
-ANSWER: what I accomplished
+Stop after INPUT. System gives RESULT. Then call another tool or finish:
+ANSWER: what you did
 
-RULES:
-- ALWAYS use tools. Never give instructions to the user.
-- One TOOL per turn. STOP after INPUT line.
-- NEVER write RESULT yourself. Wait for the system.
-- For create_file: include full content in the "content" param.
-- For web_search: use "query" param.
-- For python_exec: use "code" param.
-- For run_command: use "command" param.
-- Desktop: {desktop}
-- Workspace: {workspace}
-- System: {sysinfo}"""
+Example:
+User: create hello.txt on Desktop
+THINK: create a file
+TOOL: create_file
+INPUT: {{"file_path": "C:\\Users\\{user}\\Desktop\\hello.txt", "content": "Hello World"}}
+
+Desktop: {desktop} | Workspace: {workspace}"""
+
+# Compact tool names+params for prompt
+TOOLS_SHORT = ", ".join(
+    f"{t['function']['name']}" for t in TOOL_SCHEMAS
+)
 
 class Agent:
     def __init__(self, model_id, hw, mem=None):
@@ -269,70 +266,73 @@ class Agent:
         self.headers = {"Content-Type": "application/json"}
         self.memory = mem
         self.history = []
+        self.hw = hw
         self.system_prompt = SYSTEM.format(
-            tools=COMPACT_TOOLS, desktop=hw.desktop,
-            workspace=ROOT, sysinfo=hw.summary()
+            tools_short=TOOLS_SHORT, user=hw.user,
+            desktop=hw.desktop, workspace=ROOT
         )
 
-    def _call(self, messages):
+    def _call(self, messages, prefill=""):
+        msgs = list(messages)
+        if prefill:
+            msgs.append({"role": "assistant", "content": prefill})
         payload = json.dumps({
-            "model": self.model, "messages": messages,
-            "temperature": 0.5, "max_tokens": 1024,
-            "stop": ["RESULT:", "Result:", "result:",
-                     "Observation:", "# RESULT", "## RESULT",
-                     "\nYou ❯"]
+            "model": self.model, "messages": msgs,
+            "temperature": 0.4, "max_tokens": 512,
+            "stop": ["RESULT:", "Result:", "Observation:",
+                     "\nUser:", "\nYou:", "\nuser:"]
         }).encode('utf-8')
         req = urllib.request.Request(self.url, data=payload,
                                      headers=self.headers, method='POST')
         resp = urllib.request.urlopen(req, timeout=300)
-        return json.loads(resp.read().decode('utf-8'))['choices'][0]['message']['content'].strip()
+        text = json.loads(resp.read().decode('utf-8'))['choices'][0]['message']['content'].strip()
+        return (prefill + text) if prefill else text
 
     def _parse_tool(self, text):
-        """Extract TOOL and INPUT — handles all model quirks."""
-        # Strip all markdown formatting
+        """Extract tool + args — extremely robust."""
         clean = re.sub(r'^#{1,4}\s*', '', text, flags=re.MULTILINE)
         clean = clean.replace('**', '').replace('`', '')
 
-        # Find tool name — try multiple patterns
+        # Find tool name
         tool = None
-        for pattern in [
-            r'TOOL:\s*(\w+)', r'Tool:\s*(\w+)', r'Action:\s*(\w+)',
-            r'action:\s*(\w+)', r'tool:\s*(\w+)',
-            r'TOOL\s*(\w+)', r'Use:\s*(\w+)'
-        ]:
-            m = re.search(pattern, clean)
-            if m and m.group(1) in TOOL_NAMES:
-                tool = m.group(1); break
-            elif m:
-                # Fuzzy match tool name
-                candidate = m.group(1).lower()
+        for pat in [r'TOOL:\s*(\w+)', r'Tool:\s*(\w+)', r'Action:\s*(\w+)',
+                    r'tool:\s*(\w+)', r'Use:\s*(\w+)', r'TOOL\s+(\w+)']:
+            m = re.search(pat, clean)
+            if m:
+                name = m.group(1).strip()
+                if name in TOOL_NAMES:
+                    tool = name; break
+                # Fuzzy match
                 for tn in TOOL_NAMES:
-                    if candidate in tn or tn in candidate:
+                    if name.lower() in tn or tn in name.lower():
                         tool = tn; break
                 if tool: break
-
         if not tool:
             return None, None
 
-        # Find JSON args — try multiple patterns
+        # Find args — try JSON first, then regex extraction
         args = {}
-        for pattern in [
-            r'INPUT:\s*(\{[^}]*\})', r'Input:\s*(\{[^}]*\})',
-            r'input:\s*(\{[^}]*\})', r'Action Input:\s*(\{[^}]*\})',
-            r'args:\s*(\{[^}]*\})', r'(\{[^}]*\})'
-        ]:
-            m = re.search(pattern, clean, re.DOTALL)
+        # Try to find JSON block
+        for pat in [r'INPUT:?\s*(\{.*?\})', r'Input:?\s*(\{.*?\})',
+                    r'Action Input:?\s*(\{.*?\})', r'(\{"[^"]+"\s*:.*?\})']:
+            m = re.search(pat, clean, re.DOTALL)
             if m:
-                try:
-                    args = json.loads(m.group(1))
-                    break
-                except json.JSONDecodeError:
-                    # Try fixing common JSON issues
-                    fixed = m.group(1).replace("'", '"')
+                raw = m.group(1)
+                for attempt in [raw, raw.replace("'", '"'), re.sub(r'(\w+):', r'"\1":', raw)]:
                     try:
-                        args = json.loads(fixed)
-                        break
+                        args = json.loads(attempt); break
                     except: pass
+                if args: break
+
+        # Fallback: extract params from text using tool schema
+        if not args and tool:
+            schema = next((t for t in TOOL_SCHEMAS if t['function']['name']==tool), None)
+            if schema:
+                props = schema['function']['parameters'].get('properties', {})
+                for pname in props:
+                    # Look for "param": "value" or param: value
+                    m = re.search(rf'["\']?{pname}["\']?\s*[:=]\s*["\']([^"\'\n]+)["\']', clean)
+                    if m: args[pname] = m.group(1)
 
         return tool, args
 
@@ -357,93 +357,90 @@ class Agent:
             self.history = [{"role":"user","content":summary}] + self.history[-6:]
 
     def send(self, user_message):
-        """Main agent loop — robust tool execution."""
+        """Agent loop with pre-fill and re-prompting."""
         self.history.append({"role":"user","content":user_message})
         self._compact_history()
         if self.memory:
             self.memory.log_message("user", user_message)
 
         messages = [{"role":"system","content":self.system_prompt}] + self.history
+        use_prefill = True  # First call uses pre-fill to force format
 
         for round_n in range(8):
             check_pause()
             try:
-                response = self._call(messages)
+                prefill = "THINK:" if use_prefill else ""
+                response = self._call(messages, prefill=prefill)
             except urllib.error.HTTPError as e:
-                if e.code == 400:
-                    # Context too long — aggressive trim
+                if e.code in (400, 500):
                     warn("Context full, trimming...")
-                    self.history = self.history[-4:]
+                    self.history = self.history[-2:]
                     messages = [{"role":"system","content":self.system_prompt}] + self.history
-                    try: response = self._call(messages)
+                    try:
+                        response = self._call(messages, prefill="THINK:")
                     except Exception as e2:
-                        err(f"Still failing: {e2}"); return None
+                        err(f"Failed: {e2}"); return None
                 else:
-                    err(f"Server error ({e.code})")
-                    return None
+                    err(f"Server error ({e.code})"); return None
             except Exception as e:
                 err(f"Error: {e}"); return None
 
-            # Check for final answer FIRST
-            answer = self._parse_answer(response)
-            if answer and not self._parse_tool(response)[0]:
-                # Has answer and NO tool call → done
-                self.history.append({"role":"assistant","content":response})
-                if self.memory: self.memory.log_message("assistant", answer)
-                return answer
+            use_prefill = False  # Only prefill on first call
 
             # Check for tool call
             tool, args = self._parse_tool(response)
             if tool:
                 # Show thinking
-                for pat in [r'THINK:\s*(.*?)(?:TOOL:|Tool:|Action:)',
-                            r'Thought:\s*(.*?)(?:TOOL:|Tool:|Action:)']:
+                for pat in [r'THINK:?\s*(.*?)(?:TOOL:|Tool:|Action:)',
+                            r'Thought:?\s*(.*?)(?:TOOL:|Tool:|Action:)']:
                     m = re.search(pat, response, re.DOTALL|re.I)
                     if m:
-                        thought = m.group(1).strip()[:100]
-                        if thought: dim(f"💭 {thought}")
+                        t = m.group(1).strip()[:100]
+                        if t: dim(f"💭 {t}")
                         break
 
-                # Show tool call
+                # Show tool
                 preview = ""
                 for k in ["file_path","command","query","code","target","text","dir_path","url"]:
-                    if k in args:
-                        preview = str(args[k])[:55]; break
+                    if k in args: preview = str(args[k])[:55]; break
                 print(f"  {S.MAG}⚡ {tool}{S.R}  {S.D}{preview}{S.R}")
 
                 check_pause()
-
-                # Execute tool
-                result, img = execute_tool(tool, args)
+                result, _ = execute_tool(tool, args)
                 rline = result.split('\n')[0][:80]
-                if "✓" in rline:
-                    dim(f"{S.GRN}{rline}{S.R}")
+                if "✓" in rline: dim(f"{S.GRN}{rline}{S.R}")
                 elif "✗" in rline:
                     dim(f"{S.RED}{rline}{S.R}")
-                    if self.memory:
-                        self.memory.log_error(tool, result, user_message)
-                else:
-                    dim(rline)
+                    if self.memory: self.memory.log_error(tool, result, user_message)
+                else: dim(rline)
 
-                # Feed result back
                 messages.append({"role":"assistant","content":response})
                 messages.append({"role":"user","content":
-                    f"RESULT: {result}\n\nUse another TOOL or give ANSWER."})
+                    f"RESULT: {result}\nCall another TOOL or say ANSWER: done"})
                 self.history.append({"role":"assistant","content":response})
                 self.history.append({"role":"user","content":f"RESULT: {result}"})
                 continue
 
-            # No tool, no answer — check if it's also not a final answer
+            # Check for answer
+            answer = self._parse_answer(response)
             if answer:
                 self.history.append({"role":"assistant","content":response})
                 return answer
 
-            # Plain text response (model didn't use format)
+            # No tool AND no answer → model is chatting
+            # Re-prompt ONCE to force tool use
+            if round_n == 0:
+                dim(f"💭 (redirecting to use tools...)")
+                messages.append({"role":"assistant","content":response})
+                messages.append({"role":"user","content":
+                    "You must use a TOOL. Output: TOOL: tool_name then INPUT: {{...}}"})
+                use_prefill = True
+                continue
+
+            # Give up and return the text
             self.history.append({"role":"assistant","content":response})
-            if self.memory: self.memory.log_message("assistant", response)
             return response
 
-        warn("Max rounds reached")
         return None
 
     def clear(self):

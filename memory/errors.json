@@ -29,12 +29,25 @@
       "tool": "coordinator",
       "error": "HTTP Error 500: Internal Server Error",
       "request": "okay just open chrome and search for me what is apple."
+    },
+    {
+      "time": "2026-03-01T03:06:50.172376",
+      "tool": "create_file",
+      "error": "✗ KeyError: 'file_path'",
+      "request": "yup"
+    },
+    {
+      "time": "2026-03-01T03:07:26.010630",
+      "tool": "list_directory",
+      "error": "✗ KeyError: 'dir_path'",
+      "request": "yup"
     }
   ],
   "patterns": {
-    "create_file:✗ KeyError: 'file_path'": 1,
+    "create_file:✗ KeyError: 'file_path'": 2,
     "delegate:✗ Unknown tool: delegate. Available: create_file, ": 1,
     "coordinator:HTTP Error 400: Bad Request": 1,
-    "coordinator:HTTP Error 500: Internal Server Error": 2
+    "coordinator:HTTP Error 500: Internal Server Error": 2,
+    "list_directory:✗ KeyError: 'dir_path'": 1
   }
 }

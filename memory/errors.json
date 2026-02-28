@@ -1,0 +1,40 @@
+{
+  "errors": [
+    {
+      "time": "2026-03-01T02:31:22.909968",
+      "tool": "create_file",
+      "error": "✗ KeyError: 'file_path'",
+      "request": "hi, make me apple.txt in desktop"
+    },
+    {
+      "time": "2026-03-01T02:34:18.967880",
+      "tool": "delegate",
+      "error": "✗ Unknown tool: delegate. Available: create_file, read_file, run_command, python_exec, web_search, create_directory, etc.",
+      "request": "now find about apple from web. and paste in our apple.txt file"
+    },
+    {
+      "time": "2026-03-01T02:36:31.476286",
+      "tool": "coordinator",
+      "error": "HTTP Error 400: Bad Request",
+      "request": "now find about apple from web. and paste in our apple.txt file"
+    },
+    {
+      "time": "2026-03-01T02:37:00.486572",
+      "tool": "coordinator",
+      "error": "HTTP Error 500: Internal Server Error",
+      "request": "okay just open chrome and search for me what is apple."
+    },
+    {
+      "time": "2026-03-01T02:37:02.735206",
+      "tool": "coordinator",
+      "error": "HTTP Error 500: Internal Server Error",
+      "request": "okay just open chrome and search for me what is apple."
+    }
+  ],
+  "patterns": {
+    "create_file:✗ KeyError: 'file_path'": 1,
+    "delegate:✗ Unknown tool: delegate. Available: create_file, ": 1,
+    "coordinator:HTTP Error 400: Bad Request": 1,
+    "coordinator:HTTP Error 500: Internal Server Error": 2
+  }
+}

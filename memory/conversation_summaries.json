@@ -1,0 +1,28 @@
+{
+  "sessions": [
+    {
+      "id": "20260301_022820",
+      "summary": "User asked: search me apple's new product names and write in apple.txt f",
+      "messages": 2,
+      "date": "2026-03-01 02:30"
+    },
+    {
+      "id": "20260301_023038",
+      "summary": "User asked: hi, make me apple.txt in desktop",
+      "messages": 2,
+      "date": "2026-03-01 02:32"
+    },
+    {
+      "id": "20260301_023308",
+      "summary": "User asked: make me apple.txt in desktop | now find about apple from web. and paste in our apple.txt fi | okay just open chrome and search for me what is apple.",
+      "messages": 5,
+      "date": "2026-03-01 02:38"
+    },
+    {
+      "id": "20260301_024035",
+      "summary": "User asked: find about apple from web use chrome browser or any tool | but it has nothing.. what did you searched?",
+      "messages": 4,
+      "date": "2026-03-01 02:43"
+    }
+  ]
+}

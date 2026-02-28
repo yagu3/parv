@@ -1,0 +1,23 @@
+# Dependencies
+__pycache__/
+*.pyc
+*.pyo
+
+# Heavy folders (user provides their own)
+model/
+llama.cpp/
+
+# Runtime
+logs/
+*.log
+
+# System
+.ai_preferences.json
+node_modules/
+.env
+*.tmp
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store

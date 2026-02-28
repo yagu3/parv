@@ -77,7 +77,7 @@ class SystemInfo:
         else:
             # Model split across GPU+RAM → be conservative with RAM
             if self.ram_free > 4000: ctx = 4096
-            elif self.ram_free > 2500: ctx = 2048
+            elif self.ram_free > 2000: ctx = 2048
             else: ctx = 1024
 
         return {

@@ -1,4 +1,4 @@
-"""Agent — smart routing, session memory, self-tool-creation, clean answers."""
+"""Agent — self-aware YAGU with auto-tool-creation, skills, persistent memory."""
 import re, json, msvcrt, time, os
 from datetime import datetime
 from pathlib import Path
@@ -6,32 +6,37 @@ from pathlib import Path
 ROOT = Path(__file__).parent.parent.resolve()
 TOOL_NAMES = []
 
-# System prompt — chat + tools + self-creation
-SYSTEM = """You are YAGU, a helpful AI assistant on Windows. You can chat AND use tools.
+# ═══ SELF-AWARE SYSTEM PROMPT ═══
+SYSTEM = """You are YAGU — a self-improving AI assistant running locally on Windows.
+You were created by Yagnesh. You run on llama.cpp with a local GGUF model.
 
 Today: {date}
 User: {user} | Desktop: {desktop}
 
+YOUR CAPABILITIES:
+1. CHAT — answer questions, tell jokes, have conversations. No tools needed.
+2. TOOLS — {tool_count} built-in tools: {tools}
+3. CUSTOM TOOLS — you can CREATE new tools! Save Python to: {root}/tools/custom/
+   Format: NAME="name"; DESC="desc"; PARAMS={{...}}; def execute(args): return "result", None
+4. SKILLS — you can learn & store procedures in: {root}/skills/
+   Save as .md files describing step-by-step how to do something.
+5. MEMORY — you remember facts across sessions in: {root}/memory/store/
+{skills_summary}
 RULES:
-1. For simple questions, greetings, opinions → just ANSWER directly. No tools needed.
-2. For tasks requiring action (files, web, commands) → use the tool format below.
-3. After a tool RESULT → give a clear ANSWER with the actual info. Don't call more tools unless needed.
-4. You can CREATE new custom tools! Save a .py file to tools/custom/ with this format:
-   NAME = "tool_name"
-   DESC = "what it does"
-   PARAMS = {{"param": ("string", "description", True)}}
-   def execute(args): return "result", None
+- Simple questions → just ANSWER. No tools needed.
+- Action tasks → use TOOL format below.
+- After tool RESULT → give clear ANSWER with actual data.
+- To create a custom tool → use create_file to save .py in tools/custom/
+- Be creative, helpful, and detailed. You are YAGU, not a generic AI.
 
-TOOL FORMAT (only when action is needed):
-THINK: brief reason
+TOOL FORMAT:
+THINK: reason
 TOOL: tool_name
 INPUT: {{"param": "value"}}
 
 ANSWER FORMAT:
-ANSWER: your response here
-
-Tools: {tools}
-{session}"""
+ANSWER: your response
+{memory}"""
 
 
 def _check_pause():
@@ -42,6 +47,20 @@ def _check_pause():
                 if msvcrt.kbhit() and msvcrt.getch() == b'\x1b':
                     print(f"    ▶  RESUMED\n", flush=True); return
                 time.sleep(0.1)
+
+
+def _load_skills_summary():
+    """Load short summaries of all skills."""
+    skills_dir = ROOT / "skills"
+    if not skills_dir.exists(): return ""
+    skills = []
+    for f in skills_dir.glob("*.md"):
+        if f.name.startswith("_"): continue
+        first_line = f.read_text('utf-8', errors='replace').split('\n')[0][:60]
+        skills.append(f"  • {f.stem}: {first_line}")
+    if skills:
+        return "\nYOUR SKILLS:\n" + "\n".join(skills[:5]) + "\n"
+    return ""
 
 
 class Agent:
@@ -58,6 +77,7 @@ class Agent:
         self.hw = hw
         self._rebuild_system()
 
+    # ═══ PERSISTENT SESSION FACTS ═══
     def _facts_file(self):
         return ROOT / "memory" / "store" / "session_facts.json"
 
@@ -74,19 +94,22 @@ class Agent:
         f.write_text(json.dumps(self.session_facts[-20:], indent=2), 'utf-8')
 
     def _rebuild_system(self):
-        """Rebuild system prompt with latest session facts."""
+        """Rebuild system prompt with skills, memory, facts."""
         tools_str = ", ".join(TOOL_NAMES)
-        session = ""
+        skills = _load_skills_summary()
+        mem = ""
         if self.session_facts:
-            session = "\nRemember: " + " | ".join(self.session_facts[-5:])
+            mem = "\nREMEMBER: " + " | ".join(self.session_facts[-5:])
         self.system = SYSTEM.format(
             date=datetime.now().strftime("%Y-%m-%d %A"),
             user=self.hw.user, desktop=self.hw.desktop,
-            tools=tools_str, session=session
+            root=str(ROOT).replace('\\', '/'),
+            tools=tools_str, tool_count=len(TOOL_NAMES),
+            skills_summary=skills, memory=mem
         )
 
+    # ═══ SMART ROUTING ═══
     def _needs_tools(self, msg):
-        """Quick check if message likely needs tool use."""
         low = msg.lower()
         action_words = ['create', 'make', 'write', 'delete', 'remove', 'open',
                        'search', 'find', 'download', 'run', 'execute', 'list',
@@ -95,8 +118,8 @@ class Agent:
                        'show me', 'take screenshot', 'press', 'web']
         return any(w in low for w in action_words)
 
+    # ═══ PARSING ═══
     def _parse_tool(self, text):
-        """Extract tool + args."""
         clean = re.sub(r'^#{1,4}\s*', '', text, flags=re.MULTILINE)
         clean = clean.replace('**', '').replace('`', '')
 
@@ -139,7 +162,6 @@ class Agent:
         return tool, args
 
     def _clean_response(self, text):
-        """Strip all THINK/TOOL/INPUT markup, return clean text."""
         m = re.search(r'ANSWER:\s*(.*)', text, re.DOTALL|re.I)
         if m: return m.group(1).strip()
         clean = text
@@ -151,30 +173,49 @@ class Agent:
         clean = clean.replace('**', '').strip()
         return clean if len(clean) > 5 else text.strip()
 
+    # ═══ SELF-LEARNING ═══
     def _learn_from_message(self, msg):
-        """Extract facts to remember during session."""
         low = msg.lower()
         m = re.search(r'(?:call (?:you|yourself)|your name is|name you)\s+(\w+)', low)
         if m:
-            name = m.group(1).upper()
-            fact = f"User calls me {name}"
+            fact = f"User calls me {m.group(1).upper()}"
             if fact not in self.session_facts:
                 self.session_facts.append(fact)
-                self._save_facts()
-                self._rebuild_system()
-        if 'don\'t' in low or 'dont' in low:
-            if 'file' in low:
-                fact = "Don't create files unless asked"
+                self._save_facts(); self._rebuild_system()
+        if ('don\'t' in low or 'dont' in low) and 'file' in low:
+            fact = "Don't create files unless user explicitly asks"
+            if fact not in self.session_facts:
+                self.session_facts.append(fact)
+                self._save_facts(); self._rebuild_system()
+
+    def _auto_save_tool(self, resp):
+        """Detect tool code in response and auto-save to tools/custom/."""
+        # Look for tool definition patterns
+        name_m = re.search(r'NAME\s*=\s*["\'](\w+)["\']', resp)
+        desc_m = re.search(r'DESC\s*=\s*["\'](.+?)["\']', resp)
+        exec_m = re.search(r'def execute\(', resp)
+
+        if name_m and desc_m and exec_m:
+            tool_name = name_m.group(1)
+            # Extract the full code block
+            code_m = re.search(r'(NAME\s*=.*?def execute\(.*?\n(?:.*\n)*?.*?return\s+.+)', resp, re.DOTALL)
+            if code_m:
+                code = code_m.group(1).strip()
+                custom_dir = ROOT / "tools" / "custom"
+                custom_dir.mkdir(parents=True, exist_ok=True)
+                tool_file = custom_dir / f"{tool_name}.py"
+                tool_file.write_text(code, encoding='utf-8')
+                fact = f"Created custom tool: {tool_name}"
                 if fact not in self.session_facts:
                     self.session_facts.append(fact)
                     self._save_facts()
-                    self._rebuild_system()
+                return tool_name
+        return None
 
+    # ═══ HISTORY ═══
     def _trim_history(self):
-        """Keep last 4 messages, truncate long ones."""
         if len(self.history) > 4:
             self.history = self.history[-4:]
-        # Ensure first message is 'user' role
         while self.history and self.history[0]['role'] == 'assistant':
             self.history.pop(0)
         for msg in self.history:
@@ -182,8 +223,8 @@ class Agent:
             if len(c) > 400:
                 msg['content'] = c[:400] + '...'
 
+    # ═══ MAIN LOOP ═══
     def send(self, user_msg, execute_fn, print_fn=None):
-        """Smart agent loop."""
         from core.ui import dim, warn, err, S
 
         self._learn_from_message(user_msg)
@@ -193,7 +234,6 @@ class Agent:
         last_resp = ""
         for round_n in range(4):
             _check_pause()
-
             msgs = [{"role": "system", "content": self.system}] + list(self.history)
 
             try:
@@ -212,9 +252,13 @@ class Agent:
                 else:
                     err(f"Error: {e}"); return None
 
+            # Auto-save if model generated tool code
+            saved_tool = self._auto_save_tool(resp)
+            if saved_tool:
+                dim(f"💾 Auto-saved custom tool: {saved_tool}")
+
             # Try tool
             tool, args = self._parse_tool(resp)
-
             if tool:
                 m = re.search(r'THINK:?\s*(.*?)(?:TOOL:|Tool:)', resp, re.DOTALL|re.I)
                 if m and m.group(1).strip():

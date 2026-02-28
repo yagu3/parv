@@ -13,7 +13,7 @@ from core.agent import Agent
 from tools import get_all_schemas, execute_any
 from memory import Memory
 
-VERSION = "6.3.0"
+VERSION = "7.0.0"
 LLAMA_EXE = ROOT / "llama.cpp" / "build" / "bin" / "llama-server.exe"
 MODEL_DIRS = [ROOT/"model", ROOT/"models"]
 PREFS = ROOT / ".ai_preferences.json"

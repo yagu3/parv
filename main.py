@@ -13,7 +13,7 @@ from core.agent import Agent
 from tools import get_all_schemas, execute_any
 from memory import Memory
 
-VERSION = "7.0.0"
+VERSION = "7.1.0"
 LLAMA_EXE = ROOT / "llama.cpp" / "build" / "bin" / "llama-server.exe"
 MODEL_DIRS = [ROOT/"model", ROOT/"models"]
 PREFS = ROOT / ".ai_preferences.json"
@@ -194,24 +194,42 @@ def main():
         if not user_in: continue
 
         if user_in.startswith('/'):
-            c = user_in.lower().split()[0]
+            parts = user_in.split(maxsplit=1)
+            c = parts[0].lower()
+            arg = parts[1].strip() if len(parts) > 1 else ""
             if c in ('/exit','/quit','/q'): break
             elif c == '/clear': cls(); banner(VERSION); continue
             elif c == '/new': agent.clear(); info("New chat!"); continue
+            elif c == '/history':
+                print(f"\n{mem.show_history()}"); continue
             elif c == '/memory':
-                ctx = mem.context(budget_tokens=500)
-                print(f"\n{ctx or '  (empty)'}"); continue
+                print(f"\n{mem.show_memory()}"); continue
+            elif c == '/forget':
+                if not arg:
+                    warn("Usage: /forget <keyword>"); continue
+                n = mem.forget(arg)
+                info(f"Forgot {n} fact(s) matching '{arg}'" if n else f"No facts match '{arg}'")
+                continue
+            elif c == '/learn':
+                if not arg:
+                    warn("Usage: /learn <fact>"); continue
+                mem.learn(arg, priority=7)
+                info(f"Learned: {arg}"); continue
             elif c == '/status':
                 info(f"Model: {sel.display()} | History: {len(agent.history)} | Ctx: {opt['ctx_size']}"); continue
             elif c == '/help':
                 print(f"""
-  /exit /clear /new /status /memory /help
+  /history   — view past conversations
+  /memory    — see all stored knowledge
+  /forget X  — forget facts about X
+  /learn X   — teach me a new fact
+  /new       — fresh conversation
+  /status    — model & context info
+  /exit      — quit
 
   Just talk naturally:
     "Create a poem in apple.txt on Desktop"
     "Search the web for Python 3.13 news"
-    "List files on my Desktop"
-    "Open calculator"
 """); continue
             else: warn(f"Unknown: {c}"); continue
 

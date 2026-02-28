@@ -4,9 +4,35 @@
       "tool": "read_file",
       "error": "\u2717 Not found: C:\\Users\\yagnesh\\Desktop\\today.txt",
       "time": "2026-03-01T03:41:14.562234"
+    },
+    {
+      "tool": "web_search",
+      "error": "\u2717 Search error: 'str' object has no attribute 'unescape'",
+      "time": "2026-03-01T03:47:02.240824"
+    },
+    {
+      "tool": "web_search",
+      "error": "\u2717 Search error: 'str' object has no attribute 'unescape'",
+      "time": "2026-03-01T03:47:07.586868"
+    },
+    {
+      "tool": "web_search",
+      "error": "\u2717 Search error: 'str' object has no attribute 'unescape'",
+      "time": "2026-03-01T03:47:11.592652"
+    },
+    {
+      "tool": "web_search",
+      "error": "\u2717 Search error: 'str' object has no attribute 'unescape'",
+      "time": "2026-03-01T03:47:15.352293"
+    },
+    {
+      "tool": "web_search",
+      "error": "\u2717 Search error: 'str' object has no attribute 'unescape'",
+      "time": "2026-03-01T03:47:20.062815"
     }
   ],
   "patterns": {
-    "read_file:\u2717 Not found: C:\\Users\\yagnesh\\Desktop\\to": 1
+    "read_file:\u2717 Not found: C:\\Users\\yagnesh\\Desktop\\to": 1,
+    "web_search:\u2717 Search error: 'str' object has no attr": 5
   }
 }

@@ -175,11 +175,11 @@ def execute(name, args):
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
             try:
                 resp = urllib.request.urlopen(req, timeout=15)
-                html = resp.read().decode('utf-8', errors='replace')
+                page = resp.read().decode('utf-8', errors='replace')
                 # Extract text snippets from lite results
                 results = []
                 # DuckDuckGo lite puts results in <td> with class="result-snippet"
-                for m in re.finditer(r'class="result-snippet"[^>]*>(.*?)</td>', html, re.DOTALL):
+                for m in re.finditer(r'class="result-snippet"[^>]*>(.*?)</td>', page, re.DOTALL):
                     txt = re.sub(r'<[^>]+>', '', m.group(1)).strip()
                     if txt and len(txt) > 15: results.append(txt)
                     if len(results) >= 5: break
@@ -189,14 +189,14 @@ def execute(name, args):
                     req2 = urllib.request.Request(url2, headers={
                         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
                     resp2 = urllib.request.urlopen(req2, timeout=15)
-                    html2 = resp2.read().decode('utf-8', errors='replace')
-                    for m in re.finditer(r'class="result__snippet"[^>]*>(.*?)</(?:a|td|div)>', html2, re.DOTALL):
+                    page2 = resp2.read().decode('utf-8', errors='replace')
+                    for m in re.finditer(r'class="result__snippet"[^>]*>(.*?)</(?:a|td|div)>', page2, re.DOTALL):
                         txt = re.sub(r'<[^>]+>', '', m.group(1)).strip()
                         if txt and len(txt) > 15: results.append(txt)
                         if len(results) >= 5: break
                     # Also get titles
                     if not results:
-                        for m in re.finditer(r'class="result__a"[^>]*>(.*?)</a>', html2):
+                        for m in re.finditer(r'class="result__a"[^>]*>(.*?)</a>', page2):
                             txt = re.sub(r'<[^>]+>', '', m.group(1)).strip()
                             if txt: results.append(txt)
                             if len(results) >= 5: break

@@ -13,7 +13,7 @@ from core.agent import Agent
 from tools import get_all_schemas, execute_any
 from memory import Memory
 
-VERSION = "6.0.0"
+VERSION = "6.3.0"
 LLAMA_EXE = ROOT / "llama.cpp" / "build" / "bin" / "llama-server.exe"
 MODEL_DIRS = [ROOT/"model", ROOT/"models"]
 PREFS = ROOT / ".ai_preferences.json"
@@ -225,7 +225,7 @@ def main():
 
     # Save
     sec("Saving")
-    mem.save_session(); info("Memory saved")
+    mem.save_session(); agent.save(); info("Memory saved")
     hr()
     try: kill = input("  Stop server? (Y/N): ").strip().lower()
     except: kill = 'n'

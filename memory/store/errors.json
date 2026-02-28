@@ -29,10 +29,16 @@
       "tool": "web_search",
       "error": "\u2717 Search error: 'str' object has no attribute 'unescape'",
       "time": "2026-03-01T03:47:20.062815"
+    },
+    {
+      "tool": "python_exec",
+      "error": "\u2717 No code. Use {\"code\": \"print('hi')\"}",
+      "time": "2026-03-01T04:11:41.130707"
     }
   ],
   "patterns": {
     "read_file:\u2717 Not found: C:\\Users\\yagnesh\\Desktop\\to": 1,
-    "web_search:\u2717 Search error: 'str' object has no attr": 5
+    "web_search:\u2717 Search error: 'str' object has no attr": 5,
+    "python_exec:\u2717 No code. Use {\"code\": \"print('hi')\"}": 1
   }
 }

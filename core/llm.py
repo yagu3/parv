@@ -8,7 +8,7 @@ class LLM:
         self.headers = {"Content-Type": "application/json"}
 
     def _fix_roles(self, messages):
-        """Ensure strict user/assistant alternation. Gemma/Mistral require this."""
+        """Ensure strict system→user→assistant→user→... alternation."""
         fixed = []
         for msg in messages:
             role = msg['role']
@@ -21,12 +21,20 @@ class LLM:
                 fixed[-1]['content'] += "\n" + content
             else:
                 fixed.append({"role": role, "content": content})
-        # Must end with user if we want the model to reply
+
+        # Ensure first non-system message is 'user'
+        first_non_sys = next((i for i, m in enumerate(fixed) if m['role'] != 'system'), None)
+        if first_non_sys is not None and fixed[first_non_sys]['role'] == 'assistant':
+            # Insert a user message before the assistant
+            fixed.insert(first_non_sys, {"role": "user", "content": "(continuing)"})
+
+        # Must end with user for model to reply
         if fixed and fixed[-1]['role'] == 'assistant':
             fixed.append({"role": "user", "content": "Continue."})
-        # Must have at least one user message after system
+
+        # Safety: must have at least system + user
         non_system = [m for m in fixed if m['role'] != 'system']
-        if not non_system or non_system[0]['role'] != 'user':
+        if not non_system:
             fixed.append({"role": "user", "content": "Hello."})
         return fixed
 

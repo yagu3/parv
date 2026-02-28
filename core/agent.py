@@ -28,8 +28,9 @@ INPUT: {{"file_path": "{desktop}\\\\hello.txt", "content": "Hello World!"}}
 
 IMPORTANT:
 - ALWAYS use tools. NEVER just describe what you would do.
-- Give DETAILED answers, not just "done". Say WHAT you did and WHAT the result was.
-- For web_search, read the RESULT carefully and include actual info in your ANSWER."""
+- After a web_search RESULT, you ALREADY have the info. Just give the ANSWER with the facts.
+- Give DETAILED answers. Include actual data from RESULT, not just "done".
+- Do NOT call extra tools unnecessarily. If you have the answer, say ANSWER: immediately."""
 
 
 def _check_pause():
@@ -118,13 +119,14 @@ class Agent:
         return None
 
     def _trim_history(self):
-        """Aggressively trim to stay in context budget."""
-        if len(self.history) > 4:
-            self.history = self.history[-4:]
-        # Also truncate long messages in history
+        """Aggressively trim — only keep last 2 messages."""
+        if len(self.history) > 2:
+            self.history = self.history[-2:]
+        # Truncate long messages hard (RESULTs can be huge)
         for msg in self.history:
-            if len(msg.get('content','')) > 500:
-                msg['content'] = msg['content'][:500] + '...'
+            c = msg.get('content', '')
+            if len(c) > 300:
+                msg['content'] = c[:300] + '...'
 
     def send(self, user_msg, execute_fn, print_fn=None):
         """Run agent loop. execute_fn(tool, args) -> (result, img)."""
@@ -136,13 +138,15 @@ class Agent:
         msgs = [{"role": "system", "content": self.system}] + self.history
         use_prefill = True
 
-        for round_n in range(6):
+        last_resp = None
+        for round_n in range(4):  # Max 4 rounds to save context
             _check_pause()
             self._trim_history()  # Trim EVERY round
             msgs = [{"role": "system", "content": self.system}] + self.history
             try:
                 pf = "THINK:" if use_prefill else ""
-                resp = self.llm.call(msgs, max_tokens=512, prefill=pf)
+                resp = self.llm.call(msgs, max_tokens=400, prefill=pf)
+                last_resp = resp
             except Exception as e:
                 if "400" in str(e) or "500" in str(e):
                     # Context overflow → full reset
@@ -185,11 +189,13 @@ class Agent:
                 if self.memory and "✗" in result:
                     self.memory.log_error(tool, result, user_msg)
 
+                # Truncate result for history to save context
+                short_result = result[:200] + '...' if len(result) > 200 else result
                 msgs.append({"role": "assistant", "content": resp})
                 msgs.append({"role": "user", "content":
-                    f"RESULT: {result}\nCall another TOOL or give a detailed ANSWER about what you did and found."})
-                self.history.append({"role": "assistant", "content": resp})
-                self.history.append({"role": "user", "content": f"RESULT: {result}"})
+                    f"RESULT: {short_result}\nIf you have enough info, give ANSWER now. Otherwise call another TOOL."})
+                self.history.append({"role": "assistant", "content": resp[:200]})
+                self.history.append({"role": "user", "content": f"RESULT: {short_result}"})
                 continue
 
             # Try answer
@@ -211,7 +217,10 @@ class Agent:
             self.history.append({"role": "assistant", "content": resp})
             return resp
 
-        return None
+        # Max rounds — return last thing model said
+        if last_resp:
+            return last_resp.replace('THINK:', '').strip()[:500]
+        return "I ran out of steps. Try a simpler request or /new to start fresh."
 
     def clear(self):
         self.history = []

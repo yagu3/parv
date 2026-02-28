@@ -72,7 +72,7 @@ class SystemInfo:
             vram_left = self.vram_mb - model_mb - 300
             # q8_0 KV: ~0.2MB per 1K ctx for 4B model, ~0.5MB for 12B
             if vram_left > 2000: ctx = 8192
-            elif vram_left > 1000: ctx = 4096
+            elif vram_left > 800: ctx = 6144
             else: ctx = 2048
         else:
             # Model split across GPU+RAM → be conservative with RAM

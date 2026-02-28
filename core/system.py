@@ -56,28 +56,33 @@ class SystemInfo:
         return self
 
     def optimize(self, model_mb):
-        """Safe optimization — uses only REAL RAM, no swap."""
+        """Safe optimization — smart context based on where model lives."""
         t = max(1, self.cores - 1)
         ngl = 0
+        model_in_gpu = False
         if self.has_cuda and self.vram_mb > 0:
             avail = self.vram_mb - 300
             ngl = 999 if model_mb <= avail else max(1, int(avail / model_mb * 200))
+            model_in_gpu = (model_mb <= avail)  # Model fully fits in VRAM
 
-        # Context based on ACTUAL free RAM — conservative
-        free = self.ram_free  # in MB
-        if free < 1500:
-            ctx = 2048
-        elif free < 3000:
-            ctx = 2048  # Stay safe
-        elif free < 5000:
-            ctx = 4096
+        # Context sizing: depends on WHERE the model lives
+        if model_in_gpu:
+            # Model is fully in GPU → KV cache uses VRAM leftover
+            # VRAM leftover = vram - model - 300MB overhead
+            vram_left = self.vram_mb - model_mb - 300
+            # q8_0 KV: ~0.2MB per 1K ctx for 4B model, ~0.5MB for 12B
+            if vram_left > 2000: ctx = 8192
+            elif vram_left > 1000: ctx = 4096
+            else: ctx = 2048
         else:
-            ctx = 8192
+            # Model split across GPU+RAM → be conservative with RAM
+            if self.ram_free > 4000: ctx = 4096
+            elif self.ram_free > 2500: ctx = 2048
+            else: ctx = 1024
 
         return {
             'threads': t, 'gpu_layers': ngl, 'ctx_size': ctx,
             'batch': 512,
-            # KV cache quantization — reduces KV memory significantly
             'cache_type_k': 'q8_0', 'cache_type_v': 'q8_0',
             'flash_attn': True
         }

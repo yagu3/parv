@@ -118,9 +118,13 @@ class Agent:
         return None
 
     def _trim_history(self):
-        """Keep only last 4 messages to stay in context budget."""
+        """Aggressively trim to stay in context budget."""
         if len(self.history) > 4:
             self.history = self.history[-4:]
+        # Also truncate long messages in history
+        for msg in self.history:
+            if len(msg.get('content','')) > 500:
+                msg['content'] = msg['content'][:500] + '...'
 
     def send(self, user_msg, execute_fn, print_fn=None):
         """Run agent loop. execute_fn(tool, args) -> (result, img)."""
@@ -134,18 +138,25 @@ class Agent:
 
         for round_n in range(6):
             _check_pause()
+            self._trim_history()  # Trim EVERY round
+            msgs = [{"role": "system", "content": self.system}] + self.history
             try:
                 pf = "THINK:" if use_prefill else ""
                 resp = self.llm.call(msgs, max_tokens=512, prefill=pf)
             except Exception as e:
                 if "400" in str(e) or "500" in str(e):
-                    warn("Context full, trimming...")
-                    self.history = self.history[-2:]
-                    msgs = [{"role": "system", "content": self.system}] + self.history
-                    try: resp = self.llm.call(msgs, max_tokens=512, prefill="THINK:")
+                    # Context overflow → full reset
+                    from core.ui import warn
+                    warn("Context full — starting fresh")
+                    self.history = [{"role":"user","content":user_msg}]
+                    msgs = [{"role":"system","content":self.system}] + self.history
+                    try:
+                        resp = self.llm.call(msgs, max_tokens=512, prefill="THINK:")
                     except Exception as e2:
-                        err(f"Failed: {e2}"); return None
+                        from core.ui import err
+                        err(f"Server error: {e2}"); return "Sorry, server is having trouble. Try /new to start fresh."
                 else:
+                    from core.ui import err
                     err(f"Error: {e}"); return None
 
             use_prefill = False

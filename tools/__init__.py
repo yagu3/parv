@@ -1,5 +1,5 @@
 """Tools — built-in + auto-loaded custom tools."""
-import os, sys, json, subprocess, re, base64, time, tempfile, shutil
+import os, sys, json, subprocess, re, base64, time, tempfile, shutil, html
 import ctypes, ctypes.wintypes
 from pathlib import Path
 
@@ -201,7 +201,7 @@ def execute(name, args):
                             if txt: results.append(txt)
                             if len(results) >= 5: break
                 if results:
-                    return "\n".join(f"{i+1}. {r}" for i,r in enumerate(results)), None
+                    return "\n".join(f"{i+1}. {html.unescape(r)}" for i,r in enumerate(results)), None
                 return "No results found. The web search may be blocked.", None
             except Exception as e:
                 return f"✗ Search error: {e}", None

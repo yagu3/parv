@@ -193,16 +193,21 @@ class Agent:
                 self.session_facts.append(fact)
                 self._save_facts(); self._rebuild_system()
 
-    def _auto_save_tool(self, resp):
-        """Detect tool code in response and auto-save to tools/custom/."""
-        # Look for tool definition patterns
+    def _auto_save_tool(self, resp, user_msg):
+        """Only auto-save tool code when user explicitly asked to create a tool."""
+        low = user_msg.lower()
+        asked_for_tool = any(w in low for w in ['create tool', 'make tool', 'build tool',
+                                                 'create a tool', 'make a tool', 'custom tool',
+                                                 'new tool', 'write tool', 'write a tool'])
+        if not asked_for_tool:
+            return None
+
         name_m = re.search(r'NAME\s*=\s*["\'](\w+)["\']', resp)
         desc_m = re.search(r'DESC\s*=\s*["\'](.+?)["\']', resp)
         exec_m = re.search(r'def execute\(', resp)
 
         if name_m and desc_m and exec_m:
             tool_name = name_m.group(1)
-            # Extract the full code block
             code_m = re.search(r'(NAME\s*=.*?def execute\(.*?\n(?:.*\n)*?.*?return\s+.+)', resp, re.DOTALL)
             if code_m:
                 code = code_m.group(1).strip()
@@ -210,10 +215,8 @@ class Agent:
                 custom_dir.mkdir(parents=True, exist_ok=True)
                 tool_file = custom_dir / f"{tool_name}.py"
                 tool_file.write_text(code, encoding='utf-8')
-                fact = f"Created custom tool: {tool_name}"
-                if fact not in self.session_facts:
-                    self.session_facts.append(fact)
-                    self._save_facts()
+                if self.memory:
+                    self.memory.learn(f"Created custom tool: {tool_name}", priority=6)
                 return tool_name
         return None
 
@@ -257,8 +260,8 @@ class Agent:
                 else:
                     err(f"Error: {e}"); return None
 
-            # Auto-save if model generated tool code
-            saved_tool = self._auto_save_tool(resp)
+            # Auto-save if model generated tool code AND user asked for it
+            saved_tool = self._auto_save_tool(resp, user_msg)
             if saved_tool:
                 dim(f"💾 Auto-saved custom tool: {saved_tool}")
 
@@ -296,6 +299,10 @@ class Agent:
             clean = self._clean_response(resp)
             if clean:
                 self.history.append({"role": "assistant", "content": clean[:300]})
+                # Save to memory for /history
+                if self.memory:
+                    self.memory.log_message("user", user_msg)
+                    self.memory.log_message("assistant", clean[:200])
                 return clean
 
         if last_resp:

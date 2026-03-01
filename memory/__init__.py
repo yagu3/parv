@@ -90,12 +90,10 @@ class Memory:
 
     def top_facts(self, n=5):
         """Get top N facts by priority, sorted."""
-        scored = []
-        for f in self.facts:
-            score = f["priority"] * math.log2(f.get("access_count", 1) + 1)
-            scored.append((score, f))
-        scored.sort(reverse=True)
-        return [f for _, f in scored[:n]]
+        def score(f):
+            return f["priority"] * math.log2(f.get("access_count", 1) + 1)
+        ranked = sorted(self.facts, key=score, reverse=True)
+        return ranked[:n]
 
     # ═══ SESSION SAVE ═══
     def save_session(self):

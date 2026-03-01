@@ -1,7 +1,8 @@
-"""Agent — self-aware YAGU with auto-tool-creation, skills, persistent memory."""
+"""Agent — self-aware YAGU with auto-tool-creation, skills, RAG, persistent memory."""
 import re, json, msvcrt, time, os
 from datetime import datetime
 from pathlib import Path
+from core import rag
 
 ROOT = Path(__file__).parent.parent.resolve()
 TOOL_NAMES = []
@@ -23,7 +24,9 @@ YOUR CAPABILITIES:
 CRITICAL RULES:
 1. NEVER hallucinate real-time data (prices, news, weather). You MUST use the `web_search` tool!
 2. If the user asks for actions (files, web, commands), ALWAYS use the TOOL FORMAT.
-3. To CREATE a custom tool, you must reply with the exact Python code block format shown below. Do not just explain how to do it.
+3. To CREATE a custom tool, you must reply with the exact Python code block format shown below.
+4. If the user CORRECTS you, accept the correction immediately. Do NOT repeat your wrong answer.
+5. Use KNOWLEDGE section below if provided — it contains verified information.
 
 HOW TO USE A TOOL (Example):
 THINK: I need to find the current grape price in Surat.
@@ -41,6 +44,7 @@ def execute(args):
 
 ANSWER FORMAT (For normal chatting):
 ANSWER: your response here
+{rag_context}
 {memory}"""
 
 
@@ -74,7 +78,6 @@ class Agent:
         self.memory = memory
         self.history = []
         self.tool_schemas = tool_schemas
-        self.session_facts = self._load_facts()
 
         global TOOL_NAMES
         TOOL_NAMES = [t['function']['name'] for t in tool_schemas]
@@ -82,35 +85,27 @@ class Agent:
         self.hw = hw
         self._rebuild_system()
 
-    # ═══ PERSISTENT SESSION FACTS ═══
-    def _facts_file(self):
-        return ROOT / "memory" / "store" / "session_facts.json"
-
-    def _load_facts(self):
-        f = self._facts_file()
-        try:
-            if f.exists(): return json.loads(f.read_text('utf-8'))
-        except: pass
-        return []
-
-    def _save_facts(self):
-        f = self._facts_file()
-        f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(json.dumps(self.session_facts[-20:], indent=2), 'utf-8')
-
-    def _rebuild_system(self):
-        """Rebuild system prompt with skills, memory, facts."""
+    def _rebuild_system(self, user_msg=""):
+        """Rebuild system prompt with skills, memory, facts, RAG."""
         tools_str = ", ".join(TOOL_NAMES)
         skills = _load_skills_summary()
+        # Get top facts from unified memory
         mem = ""
-        if self.session_facts:
-            mem = "\nREMEMBER: " + " | ".join(self.session_facts[-5:])
+        if self.memory:
+            top = self.memory.top_facts(5)
+            if top:
+                facts = [f["fact"] for f in top]
+                mem = "\nREMEMBER: " + " | ".join(facts)
+        # RAG: search knowledge/ for relevant context
+        rag_ctx = ""
+        if user_msg:
+            rag_ctx = rag.context_for(user_msg, max_chars=400)
         self.system = SYSTEM.format(
             date=datetime.now().strftime("%Y-%m-%d %A"),
             user=self.hw.user, desktop=self.hw.desktop,
             root=str(ROOT).replace('\\', '/'),
             tools=tools_str, tool_count=len(TOOL_NAMES),
-            skills_summary=skills, memory=mem
+            skills_summary=skills, rag_context=rag_ctx, memory=mem
         )
 
     # ═══ SMART ROUTING ═══
@@ -180,18 +175,13 @@ class Agent:
 
     # ═══ SELF-LEARNING ═══
     def _learn_from_message(self, msg):
+        if not self.memory: return
         low = msg.lower()
         m = re.search(r'(?:call (?:you|yourself)|your name is|name you)\s+(\w+)', low)
         if m:
-            fact = f"User calls me {m.group(1).upper()}"
-            if fact not in self.session_facts:
-                self.session_facts.append(fact)
-                self._save_facts(); self._rebuild_system()
+            self.memory.learn(f"User calls me {m.group(1).upper()}", priority=9)
         if ('don\'t' in low or 'dont' in low) and 'file' in low:
-            fact = "Don't create files unless user explicitly asks"
-            if fact not in self.session_facts:
-                self.session_facts.append(fact)
-                self._save_facts(); self._rebuild_system()
+            self.memory.learn("Don't create files unless user explicitly asks", priority=8)
 
     def _auto_save_tool(self, resp, user_msg):
         """Only auto-save tool code when user explicitly asked to create a tool."""
@@ -236,6 +226,7 @@ class Agent:
         from core.ui import dim, warn, err, S
 
         self._learn_from_message(user_msg)
+        self._rebuild_system(user_msg)  # Rebuild with RAG context for this message
         self.history.append({"role": "user", "content": user_msg})
         self._trim_history()
 
@@ -313,4 +304,4 @@ class Agent:
         self.history = []
 
     def save(self):
-        self._save_facts()
+        pass  # Facts saved via memory.learn() automatically

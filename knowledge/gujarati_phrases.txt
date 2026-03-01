@@ -1,0 +1,17 @@
+# Gujarati Common Phrases
+
+How are you: "Tame kem chho?" (તમે કેમ છો?)
+I am fine: "Hu majama chhu" (હું મજામાં છું)
+What is your name: "Tamaru naam shu chhe?" (તમારું નામ શું છે?)
+Thank you: "Aabhar" (આભાર)
+Hello: "Namaste" (નમસ્તે)
+Goodbye: "Aavjo" (આવજો)
+Yes: "Ha" (હા)
+No: "Na" (ના)
+Please: "Meherbani karO" (મહેરબાની કરો)
+Sorry: "Maaf karo" (માફ કરો)
+I love you: "Hu tane prem karu chhu" (હું તને પ્રેમ કરું છું)
+Good morning: "Suprabhat" (સુપ્રભાત)
+
+Note: "Tame" is the respectful form of "you". "Tu" is informal.
+"Taru" means "your" (informal), "Tamaru" means "your" (respectful).

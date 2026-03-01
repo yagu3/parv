@@ -1,0 +1,42 @@
+[
+  {
+    "role": "user",
+    "text": "how to say how are you in gujarati?",
+    "time": "2026-03-01T05:55:01.290600"
+  },
+  {
+    "role": "assistant",
+    "text": "\"\u0aa4\u0abe\u0ab0\u0ac1\u0a82 \u0a95\u0ac7\u0ab5\u0ac1\u0a82 \u0a9b\u0ac7?\" (T\u0101r\u016b k\u0113 v\u0113\u1e41 \u015b\u0107e?)",
+    "time": "2026-03-01T05:55:01.290631"
+  },
+  {
+    "role": "user",
+    "text": "(tame kem chho?) ave ne",
+    "time": "2026-03-01T05:55:37.101097"
+  },
+  {
+    "role": "assistant",
+    "text": "(t\u0101r\u016b kem chho?)",
+    "time": "2026-03-01T05:55:37.101114"
+  },
+  {
+    "role": "user",
+    "text": "tame",
+    "time": "2026-03-01T05:55:43.109774"
+  },
+  {
+    "role": "assistant",
+    "text": "(t\u0101r\u016b kem chho?)",
+    "time": "2026-03-01T05:55:43.109790"
+  },
+  {
+    "role": "user",
+    "text": "Tame",
+    "time": "2026-03-01T05:55:46.642464"
+  },
+  {
+    "role": "assistant",
+    "text": "(t\u0101r\u016b kem chho?)",
+    "time": "2026-03-01T05:55:46.642477"
+  }
+]
